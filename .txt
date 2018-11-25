@@ -1,0 +1,7 @@
+rm -rf .git ; to remove git from the current folder. (https://teamtreehouse.com/community/how-to-remove-git-from-the-current-folder)
+git init ; to initialize folder for git
+git remote add origin ; To add the git path to folder
+git remote -v ; To check remote git path
+git add . ; Making ready to push everything in current folder in git repo
+git commit -m "Commit Message"
+git push origin master ; To push the code in git repo (master branch)
