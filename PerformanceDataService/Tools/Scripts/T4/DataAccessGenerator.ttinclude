@@ -1,0 +1,768 @@
+﻿<#@ CleanupBehavior Processor="T4VSHost" CleanupAfterProcessingTemplate="true" #>
+<#@ assembly name="System.Core" #>
+<#@ assembly name="System.Data" #>
+<#@ assembly name="System.Data.DataSetExtensions" #>
+<#@ assembly name="System.Data.Linq" #>
+<#@ assembly name="System.Linq" #>
+<#@ assembly name="System.Xml" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.Data" #>
+<#@ import namespace="System.Data.Linq" #>
+<#@ import namespace="System.Data.SqlClient" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text" #>
+<#@ include file="EF.Utility.CS.ttinclude" #> 
+<#@ include file="CodeBuilder.ttinclude" #> 
+<#@ include file="Common.ttinclude" #> 
+<#+  
+	public interface IConfiguration
+	{	
+		string ConnectionString { get; }
+		string Namespace { get; }
+		IEnumerable<string> TableNames { get; }
+	}
+
+	public sealed class GeneratorConfiguration : IConfiguration
+	{	
+		public string Namespace { get; private set; }
+		public string ConnectionString { get; private set; }
+		public IEnumerable<string> TableNames { get; private set; }
+		
+		public GeneratorConfiguration(string namespaceName, string dbConnectionString, IEnumerable<string> tableNames)
+		{
+			if(namespaceName == null)
+			{
+				throw new ArgumentNullException("namespaceName");
+			}
+			
+			if(dbConnectionString == null)
+			{
+				throw new ArgumentNullException("dbConnectionString");
+			}
+			
+			if(tableNames == null)
+			{
+				throw new ArgumentNullException("tableNames");
+			}
+		
+			this.Namespace = namespaceName;
+			this.ConnectionString = dbConnectionString;
+			this.TableNames = tableNames;
+		}
+	}
+	
+	public sealed class DbColumn
+	{
+		public int MaxLength { get; private set; }
+		public bool IsNullable { get; private set; }
+		public bool IsPrimaryKey { get; private set; }
+		public string ColumnName { get; private set; }
+		public string DataTypeName { get; private set; }
+		public Type DataType { get; private set; }
+		public short Precision { get; private set; }
+		public short Scale { get; private set; }
+		
+		public DbColumn(int maxLength, string columnName, string dataTypeName, Type dataType, bool isNullable, bool isPrimaryKey, short precision, short scale)
+		{
+			if (columnName == null)
+			{
+				throw new ArgumentNullException("columnName");
+			}
+			
+			if (dataTypeName == null)
+			{
+				throw new ArgumentNullException("dataTypeName");
+			}
+			
+			MaxLength = maxLength;
+			ColumnName = columnName;
+			DataTypeName = dataTypeName;
+			DataType	= dataType;
+			IsNullable = isNullable;
+			IsPrimaryKey = isPrimaryKey;
+			Precision = precision;
+			Scale = scale;
+		}
+	}
+
+	public sealed class DbTable
+	{
+		private List<DbColumn> columns = new List<DbColumn>();
+		public DbColumn[] Columns { get { return this.columns.ToArray(); } }
+		
+		public string TableName{ get; private set; }
+		
+		public DbTable(string tableName)
+		{
+			this.TableName = tableName;
+		}
+		
+		public void AddColumn(DbColumn column)
+		{
+			if(column == null)
+			{
+				throw new ArgumentNullException("column");
+			}
+			
+			this.columns.Add(column);
+		}
+	}
+
+	public sealed class DbTableHelper
+	{
+		// Declarations		
+		private const string TableName = "BaseTableName";
+		private const string ColumnName = "ColumnName";
+		private const string DataType = "DataType";
+		private const string DataTypeName = "DataTypeName";
+		private const string IsKey = "IsKey";
+		private const string AllowDbNull = "AllowDBNull";
+		private const string ColumnSize = "ColumnSize";
+		
+		private const string QueryFormat = "select top 0 * from {0};";
+		
+		private static Dictionary<Tuple<SqlDbType, bool>, string> FrameworkTypes;
+		private Dictionary<string, DataTable> schemaDataTables = new Dictionary<string, DataTable>();
+		
+		public DbTableHelper(string connectionString, IEnumerable<string> tableNames)
+		{		
+			if(string.IsNullOrEmpty(connectionString))
+			{
+				throw new ArgumentNullException("connectionString");
+			}
+			
+			if(tableNames == null)
+			{
+				throw new ArgumentNullException("tableNames");
+			}
+			
+			this.SetDataTableDictionary(connectionString, tableNames);
+		}
+
+		public static string GetFrameworkType(SqlDbType dbType, bool isNullable)
+		{
+			if(FrameworkTypes == null)
+			{
+				FrameworkTypes = new Dictionary<Tuple<SqlDbType, bool>, string>();
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.BigInt, true), "long?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.BigInt, false), "long");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.VarBinary, true), "byte[]");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.VarBinary, false), "byte[]");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Bit, true), "bool?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Bit, false), "bool");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Char, true), "string");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Char, false), "string");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Date, true), "DateTime?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Date, false), "DateTime");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.DateTime, true), "DateTime?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.DateTime, false), "DateTime");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.DateTime2, true), "DateTime?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.DateTime2, false), "DateTime");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.DateTimeOffset, true), "DateTimeOffset?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.DateTimeOffset, false), "DateTimeOffset");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Decimal, true), "decimal?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Decimal, false), "decimal");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Float, true), "double?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Float, false), "double");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Binary, true), "byte[]");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Binary, false), "byte[]");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Int, true), "int?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Int, false), "int");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Money, true), "decimal?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Money, false), "decimal");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.NChar, true), "string");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.NChar, false), "string");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.NText, true), "string");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.NText, false), "string");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.NVarChar, true), "string");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.NVarChar, false), "string");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Real, true), "float?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Real, false), "float");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Timestamp, true), "byte[]");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Timestamp, false), "byte[]");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.SmallInt, true), "short?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.SmallInt, false), "short");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.SmallMoney, true), "decimal?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.SmallMoney, false), "decimal");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Text, true), "string");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Text, false), "string");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Time, true), "TimeSpan?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.Time, false), "TimeSpan");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.TinyInt, true), "byte?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.TinyInt, false), "byte");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.UniqueIdentifier, true), "Guid?");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.UniqueIdentifier, false), "Guid");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.VarChar, true), "string");
+				FrameworkTypes.Add(Tuple.Create(SqlDbType.VarChar, false), "string");
+			}
+			
+			return FrameworkTypes[Tuple.Create(dbType, isNullable)];
+		}
+		
+		public static string GetFrameworkType(string dbType, bool isNullable)
+		{
+			SqlDbType sqlDbType = (SqlDbType)Enum.Parse(typeof(SqlDbType), dbType, true);
+			return GetFrameworkType(sqlDbType, isNullable);
+		}
+		
+		public DbTable GetDbTable(string tableName)
+		{			
+			if (tableName == null)
+			{
+				throw new ArgumentNullException("tableName");
+			}
+			
+			DataTable dataTable = this.GetDataTable(tableName);
+			if (dataTable == null)
+			{
+				throw new KeyNotFoundException("tableName");
+			}
+			
+			// EntityMetaData to return.
+			DbTable dbTable = new DbTable(tableName);
+
+			foreach(DataRow row in dataTable.Rows)
+			{							
+				DbColumn column = new DbColumn
+				(
+					(int)row[ColumnSize],
+					row[ColumnName].ToString(),
+					row[DataTypeName].ToString(),
+					(Type)row[DataType],
+					(bool)row[AllowDbNull],
+					(bool)row[IsKey],
+					row.Field<short>("NumericPrecision"),
+					row.Field<short>("NumericScale")
+				);
+				
+				dbTable.AddColumn(column);
+			}
+			
+			return dbTable;
+		}
+		
+		public DbTable[] GetAllDbTables()
+		{
+			DbTable[] dbTable = new DbTable[this.schemaDataTables.Count];
+			
+			int index = 0;
+			foreach(string tableName in this.schemaDataTables.Keys)
+			{
+				dbTable[index++] = GetDbTable(tableName);
+			}
+		
+			return dbTable;
+		}
+		
+		public DataTable GetSchemaTable(string tableName)
+		{			
+			DataTable dataTable = this.GetDataTable(tableName);
+			
+			if (dataTable == null)
+			{
+				throw new KeyNotFoundException("tableName");
+			}
+			
+			return dataTable.Copy();
+		}
+		
+		private DataTable GetDataTable(string tableName)
+		{		
+			try
+			{
+				return this.schemaDataTables[tableName];
+			}
+			catch (KeyNotFoundException)
+			{
+				return null;
+			}
+		}
+		
+		private void SetDataTableDictionary(string connectionString, IEnumerable<string> tableNames)
+		{
+			using(SqlConnection connection = new SqlConnection(connectionString))
+			{
+				connection.Open();
+				
+				foreach(string tableName in tableNames)
+				{
+					string queryString = string.Format(QueryFormat, tableName);
+					SqlCommand command = new SqlCommand(queryString, connection);
+					
+					SqlDataReader dataReader = command.ExecuteReader(CommandBehavior.KeyInfo);
+					DataTable tableSchema = dataReader.GetSchemaTable();
+					
+					dataReader.Close();
+					
+					this.schemaDataTables.Add(tableName, tableSchema);
+				}
+			}
+		}
+	}
+	
+	public abstract class CSharpDataAccessGenerator
+	{
+		abstract protected ClassBlock GetDataAccessClass(string tableName, IEnumerable<DbColumn> columns);
+		private const string Extension = "gen.cs";
+	
+		protected string FileExtension { get; private set; }
+		protected IConfiguration Config { get; private set; }
+		protected DynamicTextTransformation TextTransformation { get; private set; }
+		protected EntityFrameworkTemplateFileManager FileManager { get; private set; }
+				
+		protected CSharpDataAccessGenerator(object textTransformation, IConfiguration config)
+		{
+			if (textTransformation == null)
+			{
+				throw new ArgumentNullException("textTransformation");
+			}
+			
+			if (config == null)
+			{
+				throw new ArgumentNullException("config");
+			}
+			
+			this.TextTransformation = DynamicTextTransformation.Create(textTransformation);
+			this.FileManager = EntityFrameworkTemplateFileManager.Create(textTransformation);
+			this.Config = config;
+			
+			this.FileExtension = (!string.IsNullOrEmpty(CodeGenerationHelper.FileExtension)) ? CodeGenerationHelper.FileExtension : Extension;
+		}
+		
+		public void Generate()
+		{
+			GenerateFiles();
+		}
+		
+		protected virtual void GenerateFiles()
+		{
+			// Get the schema information.
+			DbTableHelper helper = new DbTableHelper(Config.ConnectionString, Config.TableNames);
+				
+			// Get the table info and generate the class.
+			foreach(string tableName in Config.TableNames)
+			{
+				DbTable dbTable = helper.GetDbTable(tableName);
+				
+				ClassBlock classBlock = GetDataAccessClass(dbTable.TableName, dbTable.Columns);
+				GenerateFile(classBlock);
+			}
+			
+			FileManager.Process();
+		}
+		
+		protected virtual void GenerateFile(ClassBlock classBlock)
+		{
+			if (classBlock == null)
+			{
+				throw new ArgumentNullException("classBlock");
+			}
+			
+			string fileName = classBlock.FileName;
+			if (string.IsNullOrEmpty(fileName))
+			{
+				fileName = string.Format("{0}.{1}", classBlock.Identifier, FileExtension);
+			}
+			
+			FileManager.StartNewFile(fileName);
+			
+			CSharpBuilder builder = new CSharpBuilder();
+			builder.AppendClassBlock(classBlock);
+			
+			TextTransformation.Write(builder.ToString());
+		}
+	}
+
+	public sealed class CSharpEntityGenerator : CSharpDataAccessGenerator
+	{	
+		public CSharpEntityGenerator(object textTransformation, IConfiguration config)
+			: base(textTransformation, config)
+		{
+		}
+		
+		protected override ClassBlock GetDataAccessClass(string tableName, IEnumerable<DbColumn> columns)
+		{		
+			if (tableName == null)
+			{
+				throw new ArgumentNullException("tableName");
+			}
+			
+			if (columns == null)
+			{
+				throw new ArgumentNullException("columns");
+			}
+			
+			string identifier = tableName + CodeGenerationHelper.EntityClassSuffix;
+			
+			ClassBlock classBlock = new ClassBlock(identifier, true, string.Format("{0} object.", identifier));
+			//classBlock.MakeSealed(true);
+			
+			if (!string.IsNullOrEmpty(Config.Namespace))
+			{
+				classBlock.Namespace = Config.Namespace;
+			}
+			
+			classBlock.AddReferences("System");
+			classBlock.AddConstructor(AccessType.Public, string.Format("Initializes a new instance of the <see cref=\"{0}\"/> class.", identifier));
+			
+			foreach(DbColumn column in columns)
+			{
+				string summary = string.Format("Gets or sets the {0} property.", column.ColumnName);
+				string summaryValue = string.Format("{0} value.", column.ColumnName);
+				string returnType = DbTableHelper.GetFrameworkType(column.DataTypeName, column.IsNullable);
+				
+				classBlock.AddProperty(column.ColumnName, returnType, summary, summaryValue);
+			}
+			
+			return classBlock;
+		}
+	}
+
+    public sealed class CSharpEFEntityGenerator : CSharpDataAccessGenerator
+	{	
+        public string BaseClassNameSpace { get; private set; }
+
+		public CSharpEFEntityGenerator(object textTransformation, IConfiguration config, string baseClassNameSpace)
+			: base(textTransformation, config)
+		{
+            if (baseClassNameSpace == null)
+            {
+                throw new ArgumentNullException("baseClassNamespace");
+            }
+			
+            this.BaseClassNameSpace = baseClassNameSpace;
+		}
+		
+		protected override ClassBlock GetDataAccessClass(string tableName, IEnumerable<DbColumn> columns)
+		{		
+			if (tableName == null)
+			{
+				throw new ArgumentNullException("tableName");
+			}
+			
+			if (columns == null)
+			{
+				throw new ArgumentNullException("columns");
+			}
+			
+            string entityName = tableName + CodeGenerationHelper.EntityClassSuffix;
+			string identifier = CodeGenerationHelper.EntityClassPrefix + entityName;
+			string baseClass = string.Format(entityName);
+
+			ClassBlock classBlock = new ClassBlock(identifier, true, string.Format("{0} object.", identifier));
+			
+			if (!string.IsNullOrEmpty(Config.Namespace))
+			{
+				classBlock.Namespace = Config.Namespace;
+			}
+			
+			classBlock.AddReferences("System");
+			classBlock.AddReferences("System.Collections.Generic");
+            classBlock.AddReferences(BaseClassNameSpace);
+            classBlock.AddParentClasses(baseClass);
+
+            string initMethodName= "Init";
+
+            classBlock.AddMethod(initMethodName, AccessType.Private, "void", false, null, "A place to add additional class initialization code.", true);
+            classBlock.AddConstructor(new ConstructorBlock(identifier, AccessType.Public, "this." + initMethodName + "();", string.Format("Initializes a new instance of the <see cref=\"{0}\"/> class.", identifier)));
+			
+			return classBlock;
+		}
+	} 
+
+	public sealed class CSharpMetaDataGenerator : CSharpDataAccessGenerator
+	{
+		private const string ColumnData = "ColumnInfo";
+		private const string StringColumnData = "StringColumnInfo";
+		private const string PropertySummaryFormat = "Gets the {0} property.";
+		private const string PropertySummaryValueFormat = "{0} value.";
+		private const string ClassSummaryFormat = "{0} object.";
+		private const string ColumnFileNameFormat = "_{0}.{1}";
+		private const string ConstructorSummaryFormat = "Initializes a new instance of the <see cref=\"{0}\"/> class.";
+				
+		public CSharpMetaDataGenerator(object textTransformation, IConfiguration config)
+			: base(textTransformation, config)
+		{
+		}
+		
+		protected override ClassBlock GetDataAccessClass(string tableName, IEnumerable<DbColumn> columns)
+		{		
+			if (tableName == null)
+			{
+				throw new ArgumentNullException("tableName");
+			}
+			
+			if (columns == null)
+			{
+				throw new ArgumentNullException("columns");
+			}
+			
+			string classIdentifier = tableName + CodeGenerationHelper.MetadataClassSuffix;
+				
+			ClassBlock classBlock = new ClassBlock(classIdentifier, true, string.Format(ClassSummaryFormat, classIdentifier));
+			classBlock.MakeStatic(true);
+			
+			if (!string.IsNullOrEmpty(Config.Namespace))
+			{
+				classBlock.Namespace = Config.Namespace;
+			}
+			
+			classBlock.AddReferences("System");
+			classBlock.AddReferences("AssetMark.Core.Data.Access");
+			classBlock.AddReferences("AssetMark.Core.Data.Access.Sql.Metadata");
+			
+			StringBuilder constructorCode = new StringBuilder();
+			foreach(DbColumn column in columns)
+			{
+				string summary = string.Format(PropertySummaryFormat, column.ColumnName);
+				string summaryValue = string.Format(PropertySummaryValueFormat, column.ColumnName);
+				string returnType = DbTableHelper.GetFrameworkType(column.DataTypeName, column.IsNullable);
+				
+				returnType = (returnType == "string") ? StringColumnData : ColumnData;
+				classBlock.AddField(column.ColumnName, returnType, true, true);
+				
+				string columnDeclaration = GetColumnDeclaration(column, returnType);
+				
+				constructorCode.Append(columnDeclaration);
+			}
+			
+			ConstructorBlock constructor = new ConstructorBlock(classIdentifier, AccessType.Private, true, constructorCode.ToString());
+			classBlock.AddConstructor(constructor);
+			
+			return classBlock;
+		}
+		
+		private string GetColumnDeclaration(DbColumn column, string returnType)
+		{
+			string columnDeclaration = string.Empty;
+			
+			if (returnType == StringColumnData)
+			{
+				columnDeclaration = string.Format("{0} = new {1}({2}, \"{0}\", {3}, {4});{5}"
+					, column.ColumnName
+					, returnType
+					, column.MaxLength
+					, column.IsNullable ? "Nullability.Nullable" : "Nullability.NotNullable"
+					, column.IsPrimaryKey ? "ColumnKeyTypes.PrimaryKey" : "ColumnKeyTypes.None"
+					, Environment.NewLine);
+			}
+			else
+			{
+				columnDeclaration = string.Format("{0} = new {1}(\"{0}\", {2}, {3});{4}"
+						, column.ColumnName
+						, returnType
+						, column.IsNullable ? "Nullability.Nullable" : "Nullability.NotNullable"
+						, column.IsPrimaryKey ? "ColumnKeyTypes.PrimaryKey" : "ColumnKeyTypes.None"
+						, Environment.NewLine);
+			}
+			
+			return columnDeclaration;
+		}
+	}
+
+	public sealed class CSharpRepositoryGenerator : CSharpDataAccessGenerator
+	{		
+		public string EntityNamespace { get; private set; }
+
+		public CSharpRepositoryGenerator(object textTransformation, IConfiguration config, string entityNamespace)
+			: base(textTransformation, config)
+		{
+			if (entityNamespace == null)
+			{
+				throw new ArgumentNullException("entityNamespace");
+			}
+			
+			this.EntityNamespace = entityNamespace;
+		}
+		
+		protected override ClassBlock GetDataAccessClass(string tableName, IEnumerable<DbColumn> columns)
+		{		
+			if (tableName == null)
+			{
+				throw new ArgumentNullException("tableName");
+			}
+			
+			if (columns == null)
+			{
+				throw new ArgumentNullException("columns");
+			}
+			
+			string classIdentifier = tableName + CodeGenerationHelper.RepositoryClassSuffix;
+			string entityIdentifier = tableName + CodeGenerationHelper.EntityClassSuffix;
+			string methodReturnType = string.Format("Expression<Func<{0}, bool>>", entityIdentifier);
+			
+			DbColumn column = columns.Where(col => col.IsPrimaryKey == true).FirstOrDefault();
+			if (column == null)
+			{
+				throw new ApplicationException(string.Format("Database table \"{0}\" does not have a primary key constraint.", tableName));
+			}
+			
+			string returnType = DbTableHelper.GetFrameworkType(column.DataTypeName, column.IsNullable);
+			string parentClass = string.Format("StandardRepositoryWriter<{0}, {1}>", entityIdentifier, returnType);
+			string methodCode = string.Format("return x => x.{0} == key;", column.ColumnName);
+						
+			ClassBlock classBlock = new ClassBlock(classIdentifier, true, string.Format("{0} object.", classIdentifier));
+			classBlock.MakeSealed(true);
+			
+			if (!string.IsNullOrEmpty(Config.Namespace))
+			{
+				classBlock.Namespace = Config.Namespace;
+			}
+			
+			classBlock.AddParentClasses(parentClass);
+			classBlock.AddReferences("System", "System.Linq.Expressions", "AssetMark.Core.Data.Access");
+			if (!string.IsNullOrEmpty(this.EntityNamespace))
+			{
+				classBlock.AddReferences(this.EntityNamespace);
+			}
+			
+			ConstructorBlock constructor = classBlock.AddConstructor(AccessType.Public, string.Format("Initializes a new instance of the <see cref=\"{0}\"/> class.", classIdentifier));
+			constructor.AddParameter("IDataContext", "dataContext");
+			constructor.AddScopeParameter("dataContext");
+			
+			MethodBlock method = classBlock.AddMethod("BuildFindByKeyWhereCondition", AccessType.Protected, methodReturnType, true, methodCode, null);
+			method.AddParameter(returnType, "key");
+			
+			return classBlock;
+		}
+	}
+	
+	public sealed class CSharpConfiguratorGenerator : CSharpDataAccessGenerator
+	{
+		public string EntityNamespace { get; private set; }
+		
+		public CSharpConfiguratorGenerator(object textTransformation, IConfiguration config, string entityNamespace)
+			: base(textTransformation, config)
+		{
+			if (entityNamespace == null)
+			{
+				throw new ArgumentNullException("entityNamespace");
+			}
+			
+			this.EntityNamespace = entityNamespace;
+		}
+		
+		protected override ClassBlock GetDataAccessClass(string tableName, IEnumerable<DbColumn> columns)
+		{		
+			if (tableName == null)
+			{
+				throw new ArgumentNullException("tableName");
+			}
+			
+			if (columns == null)
+			{
+				throw new ArgumentNullException("columns");
+			}
+			
+			string classIdentifier = CodeGenerationHelper.EntityClassPrefix + tableName + CodeGenerationHelper.ConfiguratorClassSuffix;
+			string entityIdentifier = CodeGenerationHelper.EntityClassPrefix + tableName + CodeGenerationHelper.EntityClassSuffix;			
+			string parentClass = string.Format("IEntityConfigurator<{0}>", entityIdentifier);
+			string methodReturnType = string.Format("EntityTypeConfiguration<{0}>", entityIdentifier);
+			
+			StringBuilder methodCode = new StringBuilder();
+
+            methodCode.AppendLine(string.Format("config.ToTable(\"{0}\");", tableName));
+			methodCode.Append(Environment.NewLine);
+
+			foreach (DbColumn column in columns)
+			{
+				if (column.IsPrimaryKey)
+				{
+					string key = string.Format("config.HasKey(x => x.{0});", column.ColumnName);
+					methodCode.AppendLine(key);
+					methodCode.Append(Environment.NewLine);
+				}
+				
+				string  configCode = BuildConfigCode(column);
+				if (configCode.Length > 0)
+				{
+					methodCode.AppendLine(configCode);
+					methodCode.Append(Environment.NewLine);
+				}
+			}
+					
+            methodCode.AppendLine("this.ConfigureEntityExt(config);");
+									
+			ClassBlock classBlock = new ClassBlock(classIdentifier, true, null);
+			classBlock.MakeSealed(true);
+			
+			if (!string.IsNullOrEmpty(Config.Namespace))
+			{
+				classBlock.Namespace = Config.Namespace;
+			}
+			
+			classBlock.AddParentClasses(parentClass);
+			classBlock
+				.AddReferences(
+					"System", 
+					"System.Data.Entity.ModelConfiguration", 
+					"AssetMark.Core.Data.Access.EntityFramework"
+				);
+				
+			if (!string.IsNullOrEmpty(this.EntityNamespace))
+			{
+				classBlock.AddReferences(this.EntityNamespace);
+			}
+			
+			classBlock.AddConstructor(AccessType.Public, null);
+			
+			MethodBlock method = classBlock.AddMethod("ConfigureEntity", AccessType.Public, "void", false, methodCode.ToString(), null);
+			method.AddParameter(methodReturnType, "config");
+			
+			MethodBlock methodExt = classBlock.AddMethod("ConfigureEntityExt", AccessType.Private, "void", false, null, null, true);
+			methodExt.AddParameter(methodReturnType, "config");
+			
+			return classBlock;
+		}
+		
+		private string BuildConfigCode(DbColumn column)
+		{
+			StringBuilder sb = new StringBuilder();
+
+            sb.Append(Environment.NewLine);
+			sb.Append("\t");
+
+			if (column.DataTypeName.ToLower() == SqlDbType.Decimal.ToString().ToLower())
+			{
+				sb.Append(string.Format(".HasColumnType(\"{0}\")", column.DataTypeName));
+				sb.Append(Environment.NewLine);
+				sb.Append("\t");
+				sb.Append(string.Format(".HasPrecision({0}, {1})", column.Precision, column.Scale));
+			}
+			else
+			{
+				sb.Append("/*");
+				sb.Append(string.Format(".HasColumnType(\"{0}\")", column.DataTypeName));
+				sb.Append("*/");
+			}
+
+			if (!column.IsNullable)
+			{					
+				sb.Append(Environment.NewLine);
+			
+				string required = string.Format("\t.IsRequired()");
+				sb.Append(required);
+			}
+			
+			string returnType = DbTableHelper.GetFrameworkType(column.DataTypeName, column.IsNullable);
+			if (returnType == "string")
+			{
+				sb.Append(Environment.NewLine);
+				
+				string maxLength = string.Format("\t.HasMaxLength({0})", column.MaxLength);
+				sb.Append(maxLength);
+			}
+			
+			if (sb.Length > 0)
+			{
+				string property = string.Format("config.Property(x => x.{0})", column.ColumnName);
+				
+				sb.Append(";");
+				sb.Insert(0, property);
+			}
+			
+			return sb.ToString();
+		}
+	}
+	
+#>

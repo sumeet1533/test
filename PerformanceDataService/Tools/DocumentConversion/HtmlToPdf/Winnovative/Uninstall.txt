@@ -1,0 +1,6 @@
+Uninstallation Instructions
+===========================
+
+To completely uninstall the software from your computer you have to simply remove the folder where you extracted the files from archive 
+downloaded from our website. There is not an uninstall program because no changes were made in your computer configuration during installation 
+process described on our website. 

@@ -1,0 +1,38 @@
+@import "am-functions";
+
+$am-pixel-base: 16px !default;
+
+@mixin am-sizing-rem-plus-px($prop, $val)
+{
+	@if(type_of($val) == number and unit($val) == 'rem')
+	{
+		$new-val: $am-pixel-base * am-strip-unit($val);
+		#{$prop}: $new-val;
+	}
+	#{$prop}: $val;
+}
+
+@mixin am-text-unselectable()
+{
+	-webkit-touch-callout : none;
+	-webkit-user-select : none;
+	-moz-user-select : none;
+	-ms-user-select : none;
+	user-select : none;
+}
+
+@mixin am-tooltip-transition($property: all, $duration: 0, $timing-function: ease, $delay: 0)
+{
+	transition-property: $property;
+	transition-duration: $duration;
+	transition-timing-function: $timing-function;
+	transition-delay: $delay;
+}
+
+@mixin am-clearfix {
+    &:after {
+      content: " ";
+      display: table;
+      clear: both;
+    }
+}

@@ -1,0 +1,50 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+	<PropertyGroup>
+		<GenerateBuildInfoConfigFile>false</GenerateBuildInfoConfigFile>
+	</PropertyGroup>
+	
+	<!-- Use Any Specified Environment Property -->
+	<ItemGroup Condition="'$(Environment)' != ''">
+		<Environment Include="$(Environment)" />
+	</ItemGroup>
+
+	<!-- Include Every Environment If None Was Specified -->
+	<ItemGroup Condition="'@(Environment->Count())' == '0'">
+		<Environment Include="DevInt" />
+		<Environment Include="QA" />
+		<Environment Include="Prod" />
+	</ItemGroup>
+
+	<Target Name="PrepareEnvironmentSpecificDeployments" AfterTargets="_CopyWebApplication;_CopyWebApplicationLegacy" Inputs="@(Environment)" Outputs="%(Identity).Dummy" Condition=" '$(BuildingInsideVisualStudio)'!='true' ">
+		<PropertyGroup>
+			<SourceDir>$(MSBuildProjectDirectory)\</SourceDir>
+			<EnvironmentName>%(Environment.Identity)</EnvironmentName>
+			<EnvironmentDir>$(WebProjectOutputDir) ($(EnvironmentName))\</EnvironmentDir>
+		</PropertyGroup>
+
+		<!-- Find Published Files -->
+		<ItemGroup>
+			<PublishedFiles Include="$(WebProjectOutputDir)\**\*.*" />
+		</ItemGroup>
+		
+		<!-- Copy Published Files For Each Environment -->
+		<Copy SourceFiles="@(PublishedFiles)" DestinationFiles="@(PublishedFiles->'$(EnvironmentDir)%(RecursiveDir)%(Filename)%(Extension)')" />
+
+		<!--Find Configuration Files-->
+		<ItemGroup>
+			<FilesToTransform Include="$(EnvironmentDir)\**\*.config" />
+		</ItemGroup>
+		
+		<!--Transform Using Any Configuration Specific Transforms-->
+		<TransformXml Condition=" Exists('$(SourceDir)%(RecursiveDir)%(Filename).$(Configuration)%(Extension)') "
+									Source="%(FilesToTransform.Identity)"
+									Transform="@(FilesToTransform->'$(SourceDir)%(RecursiveDir)%(Filename).$(Configuration)%(Extension)')"
+									Destination="%(FilesToTransform.Identity)" />
+
+		<!--Transform Using Any Configuration/Environment Specific Transforms-->
+		<TransformXml Condition=" Exists('$(SourceDir)%(RecursiveDir)%(Filename).$(Configuration)-$(EnvironmentName)%(Extension)') "
+									Source="%(FilesToTransform.Identity)"
+									Transform="@(FilesToTransform->'$(SourceDir)%(RecursiveDir)%(Filename).$(Configuration)-$(EnvironmentName)%(Extension)')"
+									Destination="%(FilesToTransform.Identity)" />
+	</Target>
+</Project>

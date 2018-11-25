@@ -1,0 +1,6 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+	<UsingTask AssemblyFile="xunit.runner.msbuild.dll" TaskName="Xunit.Runner.MSBuild.xunit" />
+	<Target Name="RunUnitTests" Condition="'$(BuildingInsideVisualStudio)' == 'true'" AfterTargets="Build">
+		<!--<xunit Assemblies="$(OutputPath)$(TargetFileName)" AppDomains="true" ParallelizeAssemblies="true" ContinueOnError="ErrorAndContinue" />-->
+	</Target>
+</Project>

@@ -1,0 +1,621 @@
+﻿<#@ assembly name="System.Core" #>
+<#@ assembly name="$(AMToolsDir)Analysis\ICSharpCode.NRefactory\ICSharpCode.NRefactory.dll" #>
+<#@ assembly name="$(AMToolsDir)Analysis\ICSharpCode.NRefactory\ICSharpCode.NRefactory.CSharp.dll" #>
+<#@ import namespace="System.CodeDom" #>
+<#@ import namespace="System.CodeDom.Compiler" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.IO" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Reflection" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Text.RegularExpressions" #>
+<#@ import namespace="Microsoft.CSharp" #>
+<#@ import namespace="Microsoft.VisualStudio.TextTemplating" #>
+<#@ import namespace="ICSharpCode.NRefactory.CSharp" #>
+<#@ import namespace="ICSharpCode.NRefactory.TypeSystem" #>
+<#@ include file="Common.ttinclude" #><#+
+    public static class CSharpMvcAssetsHelper
+    {
+		public static void GenerateAssetsHelperClass(TextTransformation tt, string ns, string className, string siteDirPath)
+        {
+            GenerateAssetsHelperClass(tt, ns, className, siteDirPath, CodeGenerationHelper.DefaultCodeGeneratorOptions);
+        }
+
+        public static void GenerateAssetsHelperClass(TextTransformation tt, string ns, string className, string siteDirPath, CodeGeneratorOptions codeGeneratorOptions)
+        {
+            Func<string, string> getViewNameFromPath = delegate(string path)
+            {
+                string suffix = "View";
+                string viewName = Path.GetFileNameWithoutExtension(path);
+
+                if (viewName.EndsWith(suffix))
+                    return viewName.Substring(0, viewName.Length - suffix.Length);
+                    
+                return viewName;
+            };
+
+			Func<CodeTypeDeclaration, string, CodeTypeDeclaration> createType = delegate(CodeTypeDeclaration parentType, string typeName)
+			{
+				CodeTypeDeclaration type = new CodeTypeDeclaration(typeName);
+				type.IsPartial = true;
+				type.IsClass = true;
+				type.TypeAttributes = TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Abstract;
+				parentType.Members.Add(type);
+
+				return type;
+			};
+
+            string viewFileNameFilter = "*.cshtml";
+			string scriptFileNameFilter = "*.js";
+			string styleFileNameFilter = "*.css";
+
+			string assertVersionMagicString = "-{version}";
+			string assetVersionPattern = @"(-(\d\.){1,})";
+			string assetVersionReplacement = assertVersionMagicString + ".";
+			string assetNamePartPattern = @"(^\S{1})|(_\S{1})";
+
+            CSharpCodeProvider codeProvider = new CSharpCodeProvider();
+
+            GeneratedCodeAttribute toolInfoAttribute = new GeneratedCodeAttribute(CodeGenerationHelper.ToolName, CodeGenerationHelper.ToolVersion);
+            CodeAttributeDeclaration generatedCodeAttribute = new CodeAttributeDeclaration
+            (
+                typeof(GeneratedCodeAttribute).FullName, 
+                new CodeAttributeArgument(new CodePrimitiveExpression(toolInfoAttribute.Tool)),
+                new CodeAttributeArgument(new CodePrimitiveExpression(toolInfoAttribute.Version))
+            );
+
+            CodeNamespace assetsHelperTypeNamespace = new CodeNamespace(ns);
+            CodeTypeDeclaration assetsHelperType = new CodeTypeDeclaration(className);
+
+            assetsHelperType.IsPartial = true;
+            assetsHelperType.IsClass = true;
+            assetsHelperType.TypeAttributes = TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Abstract;
+            assetsHelperType.CustomAttributes.Add(generatedCodeAttribute);
+
+			if (Directory.Exists(Path.Combine(siteDirPath, "Assets")))
+			{
+				CodeTypeDeclaration contentType = createType(assetsHelperType, "Content");
+				string imagesDirPath = Path.Combine(siteDirPath, "Assets", "Images");
+
+				if (Directory.Exists(imagesDirPath))
+				{
+					IEnumerable<string> imageFilePathSet = Directory.EnumerateFiles(imagesDirPath);
+
+					if (imageFilePathSet.Any())
+					{
+						CodeTypeDeclaration contentImagesType = createType(contentType, "Images");
+
+						foreach (string imageFilePath in imageFilePathSet)
+						{
+							string imageName = Path.GetFileNameWithoutExtension(imageFilePath);
+
+							CodeMemberField nameConst = new CodeMemberField(typeof(string), imageName);
+							nameConst.InitExpression = new CodePrimitiveExpression("~/Assets/Images/" + Path.GetFileName(imageFilePath));
+							nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+							contentImagesType.Members.Add(nameConst);
+						}
+					}
+				}
+
+				string scriptsDirPath = Path.Combine(siteDirPath, "Assets", "Scripts");
+
+				if (Directory.Exists(scriptsDirPath))
+				{
+					IEnumerable<string> scriptFilePathSet = Directory.EnumerateFiles(scriptsDirPath, scriptFileNameFilter);
+
+					if (scriptFilePathSet.Any())
+					{
+						CodeTypeDeclaration contentScriptsType = createType(contentType, "Scripts");
+
+						foreach (string scriptFilePath in scriptFilePathSet)
+						{
+							string originalScriptFileName = Path.GetFileName(scriptFilePath);
+							string scriptFilePathWithVersionMask = Path.Combine(Path.GetDirectoryName(scriptFilePath), Regex.Replace(originalScriptFileName, assetVersionPattern, assetVersionReplacement));
+							string scriptName = Path.GetFileNameWithoutExtension(scriptFilePathWithVersionMask);
+
+							if (scriptName != "_references" && !scriptName.EndsWith(".min"))
+							{
+								if (scriptName.EndsWith(assertVersionMagicString))
+								{
+									scriptName = scriptName.Substring(0, scriptName.Length - assertVersionMagicString.Length);
+								}
+
+								scriptName = scriptName
+									.Replace(".", "_")
+									.Replace("-", "_");
+
+								scriptName = Regex.Replace
+								(
+									scriptName,
+									assetNamePartPattern,
+									x => x.Value.ToUpper()
+								);
+
+								string scriptFileName = Path
+									.GetFileName(scriptFilePathWithVersionMask);
+
+								CodeMemberField nameConst = new CodeMemberField(typeof(string), scriptName);
+								nameConst.InitExpression = new CodePrimitiveExpression("~/Assets/Scripts/" + scriptFileName);
+								nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+								contentScriptsType.Members.Add(nameConst);
+							}
+						}
+					}
+				}
+
+				string stylesDirPath = Path.Combine(siteDirPath, "Assets", "Styles");
+
+				if (Directory.Exists(stylesDirPath))
+				{
+					IEnumerable<string> styleFilePathSet = Directory.EnumerateFiles(stylesDirPath, styleFileNameFilter);
+
+					if (styleFilePathSet.Any())
+					{
+						CodeTypeDeclaration contentStylesType = createType(contentType, "Styles");
+
+						foreach (string styleFilePath in styleFilePathSet)
+						{
+							string originalStyleFileName = Path.GetFileName(styleFilePath);
+							string styleFilePathWithVersionMask = Path.Combine(Path.GetDirectoryName(styleFilePath), Regex.Replace(originalStyleFileName, assetVersionPattern, assetVersionReplacement));
+							string styleName = Path.GetFileNameWithoutExtension(styleFilePathWithVersionMask);
+
+							if (!styleName.EndsWith(".min"))
+							{
+								if (styleName.EndsWith(assertVersionMagicString))
+								{
+									styleName = styleName.Substring(0, styleName.Length - assertVersionMagicString.Length);
+								}
+
+								styleName = styleName
+									.Replace(".", "_")
+									.Replace("-", "_");
+
+								styleName = Regex.Replace
+								(
+									styleName,
+									assetNamePartPattern,
+									x => x.Value.ToUpper()
+								);
+
+								string styleFileName = Path
+									.GetFileName(styleFilePath);
+
+								CodeMemberField nameConst = new CodeMemberField(typeof(string), styleName);
+								nameConst.InitExpression = new CodePrimitiveExpression("~/Assets/Styles/" + styleFileName);
+								nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+								contentStylesType.Members.Add(nameConst);
+							}
+						}
+					}
+				}
+			}
+			
+			if (Directory.Exists(Path.Combine(siteDirPath, "Views")))
+			{
+				CodeTypeDeclaration viewsType = createType(assetsHelperType, "Views");
+
+				string layoutsDirPath = Path.Combine(siteDirPath, "Views", "Layouts");
+
+				if (Directory.Exists(layoutsDirPath))
+				{
+					IEnumerable<string> layoutFilePathSet = Directory.EnumerateFiles(layoutsDirPath, viewFileNameFilter);
+
+					if (layoutFilePathSet.Any())
+					{
+						CodeTypeDeclaration viewsLayoutsType = createType(viewsType, "Layouts");
+
+						foreach (string layoutFilePath in layoutFilePathSet)
+						{
+							string layoutName = getViewNameFromPath(layoutFilePath);
+
+							CodeMemberField nameConst = new CodeMemberField(typeof(string), layoutName);
+							nameConst.InitExpression = new CodePrimitiveExpression("~/Views/Layouts/" + Path.GetFileName(layoutFilePath));
+							nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+							viewsLayoutsType.Members.Add(nameConst);
+						}
+					}
+				}
+
+				string sharedViewsDirPath = Path.Combine(siteDirPath, "Views", "Shared");
+
+				if (Directory.Exists(sharedViewsDirPath))
+				{
+					IEnumerable<string> sharedViewFilePathSet = Directory.EnumerateFiles(sharedViewsDirPath, viewFileNameFilter);
+
+					if (sharedViewFilePathSet.Any())
+					{
+						CodeTypeDeclaration viewsSharedType = createType(viewsType, "Shared");
+
+						foreach (string sharedViewPath in sharedViewFilePathSet)
+						{
+							string viewName = getViewNameFromPath(sharedViewPath);
+
+							CodeMemberField nameConst = new CodeMemberField(typeof(string), viewName);
+							nameConst.InitExpression = new CodePrimitiveExpression(viewName);
+							nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+							viewsSharedType.Members.Add(nameConst);
+						}
+					}
+				}
+
+				string templatesViewsDirPath = Path.Combine(siteDirPath, "Views", "Templates");
+
+				if (Directory.Exists(templatesViewsDirPath))
+				{
+					CodeTypeDeclaration viewsTemplatesType = createType(viewsType, "Templates");
+
+					string editorTemplatesDirPath = Path.Combine(templatesViewsDirPath, "EditorTemplates");
+					string displayTemplatesDirPath = Path.Combine(templatesViewsDirPath, "DisplayTemplates");
+
+					if (Directory.Exists(editorTemplatesDirPath))
+					{
+						IEnumerable<string> editorTemplatesViewFilePathSet = Directory
+							.EnumerateFiles(editorTemplatesDirPath, viewFileNameFilter);
+
+						if (editorTemplatesViewFilePathSet.Any())
+						{
+							CodeTypeDeclaration viewsTemplatesEditorType = createType(viewsTemplatesType, "Editor");
+
+							foreach (string editorTemplatesViewPath in editorTemplatesViewFilePathSet)
+							{
+								string viewName = getViewNameFromPath(editorTemplatesViewPath);
+
+								CodeMemberField nameConst = new CodeMemberField(typeof(string), viewName);
+								nameConst.InitExpression = new CodePrimitiveExpression(viewName);
+								nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+								viewsTemplatesEditorType.Members.Add(nameConst);
+							}
+						}
+					}
+
+					if (Directory.Exists(displayTemplatesDirPath))
+					{
+						IEnumerable<string> displayTemplatesViewFilePathSet = Directory
+							.EnumerateFiles(displayTemplatesDirPath, viewFileNameFilter);
+
+						if (displayTemplatesViewFilePathSet.Any())
+						{
+							CodeTypeDeclaration viewsTemplatesDisplayType = createType(viewsTemplatesType, "Display");
+
+							foreach (string displayTemplatesViewPath in displayTemplatesViewFilePathSet)
+							{
+								string viewName = getViewNameFromPath(displayTemplatesViewPath);
+
+								CodeMemberField nameConst = new CodeMemberField(typeof(string), viewName);
+								nameConst.InitExpression = new CodePrimitiveExpression(viewName);
+								nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+								viewsTemplatesDisplayType.Members.Add(nameConst);
+							}
+						}
+					}
+				}
+
+				string areasDirPath = Path.Combine(siteDirPath, "Views", "Areas");
+
+				if (Directory.Exists(areasDirPath))
+				{
+					CodeTypeDeclaration areasType = createType(assetsHelperType, "Areas");
+
+					foreach (string areaDirPath in Directory.EnumerateDirectories(areasDirPath))
+					{
+						CodeTypeDeclaration areaAreasType = createType(areasType, Path.GetFileName(areaDirPath));
+
+						IEnumerable<string> areaViewFilePathSet = Directory.EnumerateFiles(areaDirPath, viewFileNameFilter);
+						string partsDirPath = Path.Combine(areaDirPath, "Parts");
+						string areaLayoutsDirPath = Path.Combine(areaDirPath, "Layouts");
+
+						if (areaViewFilePathSet.Any() || Directory.Exists(partsDirPath) || Directory.Exists(areaLayoutsDirPath))
+						{
+							CodeTypeDeclaration viewsAreaAreasType = createType(areaAreasType, "Views");
+
+							foreach (string viewPath in areaViewFilePathSet)
+							{
+								string viewName = getViewNameFromPath(viewPath);
+
+								CodeMemberField nameConst = new CodeMemberField(typeof(string), viewName);
+								nameConst.InitExpression = new CodePrimitiveExpression(Path.GetFileName(areaDirPath) + "/" + viewName);
+								nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+								viewsAreaAreasType.Members.Add(nameConst);
+							}
+
+							if (Directory.Exists(partsDirPath))
+							{
+								IEnumerable<string> partViewFilePathSet = Directory.EnumerateFiles(partsDirPath, viewFileNameFilter);
+
+								if (partViewFilePathSet.Any())
+								{
+									CodeTypeDeclaration partsType = createType(viewsAreaAreasType, "Parts");
+
+									foreach (string partViewFilePath in partViewFilePathSet)
+									{
+										string viewName = getViewNameFromPath(partViewFilePath);
+
+										CodeMemberField nameConst = new CodeMemberField(typeof(string), viewName);
+										nameConst.InitExpression = new CodePrimitiveExpression(viewName);
+										nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+										partsType.Members.Add(nameConst);
+									}
+								}
+							}
+
+							if (Directory.Exists(areaLayoutsDirPath))
+							{
+								IEnumerable<string> layoutFilePathSet = Directory.EnumerateFiles(areaLayoutsDirPath, viewFileNameFilter);
+
+								if (layoutFilePathSet.Any())
+								{
+									CodeTypeDeclaration layoutsViewsAreaAreasType = createType(viewsAreaAreasType, "Layouts");
+
+									foreach (string layoutFilePath in layoutFilePathSet)
+									{
+										string layoutName = getViewNameFromPath(layoutFilePath);
+
+										CodeMemberField nameConst = new CodeMemberField(typeof(string), layoutName);
+										nameConst.InitExpression = new CodePrimitiveExpression("~/Views/Areas/" + Path.GetFileName(areaDirPath) + "/Layouts/" + Path.GetFileName(layoutFilePath));
+										nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+										layoutsViewsAreaAreasType.Members.Add(nameConst);
+									}
+								}
+							}
+						}
+
+						string areaAssetsDirPath = Path.Combine(areaDirPath, "Assets");
+
+						if (Directory.Exists(areaAssetsDirPath))
+						{
+							CodeTypeDeclaration contentAreaAreasType = createType(areaAreasType, "Content");
+							string areaScriptsDirPath = Path.Combine(areaAssetsDirPath, "Scripts");
+
+							if (Directory.Exists(areaScriptsDirPath))
+							{
+								IEnumerable<string> scriptFilePathSet = Directory.EnumerateFiles(areaScriptsDirPath, scriptFileNameFilter);
+
+								if (scriptFilePathSet.Any())
+								{
+									CodeTypeDeclaration scriptsContentAreaAreasType = createType(contentAreaAreasType, "Scripts");
+
+									foreach (string scriptFilePath in scriptFilePathSet)
+									{
+										string originalScriptFileName = Path.GetFileName(scriptFilePath);
+										string scriptFilePathWithVersionMask = Path.Combine(Path.GetDirectoryName(scriptFilePath), Regex.Replace(originalScriptFileName, assetVersionPattern, assetVersionReplacement));
+										string scriptName = Path.GetFileNameWithoutExtension(scriptFilePathWithVersionMask);
+
+										if (scriptName != "_references" && !scriptName.EndsWith(".min"))
+										{
+											if (scriptName.EndsWith(assertVersionMagicString))
+											{
+												scriptName = scriptName.Substring(0, scriptName.Length - assertVersionMagicString.Length);
+											}
+
+											scriptName = scriptName
+												.Replace(".", "_")
+												.Replace("-", "_");
+
+											scriptName = Regex.Replace
+											(
+												scriptName,
+												assetNamePartPattern,
+												x => x.Value.ToUpper()
+											);
+
+											string scriptFileName = Path
+												.GetFileName(scriptFilePathWithVersionMask);
+
+											CodeMemberField nameConst = new CodeMemberField(typeof(string), scriptName);
+											nameConst.InitExpression = new CodePrimitiveExpression("~/Views/Areas/" + areaAreasType.Name + "/Assets/Scripts/" + scriptFileName);
+											nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+											scriptsContentAreaAreasType.Members.Add(nameConst);
+										}
+									}
+								}
+							}
+
+							string areaStylesDirPath = Path.Combine(areaAssetsDirPath, "Styles");
+
+							if (Directory.Exists(areaStylesDirPath))
+							{
+								IEnumerable<string> styleFilePathSet = Directory.EnumerateFiles(areaStylesDirPath, styleFileNameFilter);
+
+								if (styleFilePathSet.Any())
+								{
+									CodeTypeDeclaration stylesContentAreaAreasType = createType(contentAreaAreasType, "Styles");
+
+									foreach (string styleFilePath in styleFilePathSet)
+									{
+										string originalStyleFileName = Path.GetFileName(styleFilePath);
+										string styleFilePathWithVersionMask = Path.Combine(Path.GetDirectoryName(styleFilePath), Regex.Replace(originalStyleFileName, assetVersionPattern, assetVersionReplacement));
+										string styleName = Path.GetFileNameWithoutExtension(styleFilePathWithVersionMask);
+
+										if (!styleName.EndsWith(".min"))
+										{
+											if (styleName.EndsWith(assertVersionMagicString))
+											{
+												styleName = styleName.Substring(0, styleName.Length - assertVersionMagicString.Length);
+											}
+
+											styleName = styleName
+												.Replace(".", "_")
+												.Replace("-", "_");
+
+											styleName = Regex.Replace
+											(
+												styleName,
+												assetNamePartPattern,
+												x => x.Value.ToUpper()
+											);
+
+											string styleFileName = Path
+												.GetFileName(styleFilePath);
+
+											CodeMemberField nameConst = new CodeMemberField(typeof(string), styleName);
+											nameConst.InitExpression = new CodePrimitiveExpression("~/Views/Areas/" + areaAreasType.Name + "/Assets/Styles/" + styleFileName);
+											nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+											stylesContentAreaAreasType.Members.Add(nameConst);
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+            assetsHelperTypeNamespace.Types.Add(assetsHelperType);
+
+            using (StringWriter codeWriter = new StringWriter())
+            {
+                CodeCompileUnit generatedCode = new CodeCompileUnit();
+
+                generatedCode.Namespaces.Add(assetsHelperTypeNamespace);
+                codeProvider.GenerateCodeFromCompileUnit(generatedCode, codeWriter, codeGeneratorOptions);
+
+                tt.Write(CodeGenerationHelper.CSharp.EnsureArtifactsDefinedAsStatic(codeWriter.ToString()));
+            }
+        }
+    }
+
+    public static class CSharpMvcMetadataGenerator
+    {
+        public static void GenerateControllerMetadataClass(TextTransformation tt, string csFilePath)
+        {
+            GenerateControllerMetadataClass(tt, csFilePath, CodeGenerationHelper.DefaultCodeGeneratorOptions);
+        }
+
+        public static void GenerateControllerMetadataClass(TextTransformation tt, string csFilePath, CodeGeneratorOptions codeGeneratorOptions)
+        {
+            CSharpParser parser = new CSharpParser();
+            CSharpCodeProvider codeProvider = new CSharpCodeProvider();
+
+            using (Stream FileStream = File.OpenRead(csFilePath))
+            {
+                IEnumerable<string> validMethodReturnTypeNames = new string[]
+                {
+                    "ActionResult",
+                    "ViewResult",
+                    "PartialViewResult",
+                    "FileResult",
+					"ContentResult"
+                };
+
+                Func<AstNode, CodeNamespace, IEnumerable<CodeNamespace>> VisitNode = null;
+                VisitNode = delegate(AstNode parentNode, CodeNamespace parentNamespace)
+                {
+                    List<CodeNamespace> namespaceSet = new List<CodeNamespace>();
+
+                    if (parentNamespace == null)
+                    {
+                        parentNamespace = new CodeNamespace();
+                        namespaceSet.Add(parentNamespace);
+                    }
+
+                    if (parentNode is NamespaceDeclaration)
+                    {
+                        NamespaceDeclaration nsNode = (NamespaceDeclaration)parentNode;
+                        CodeNamespace childNamespace = new CodeNamespace(string.Join(".", new [] { parentNamespace.Name, nsNode.Name}.Where(x => !string.IsNullOrWhiteSpace(x))));
+
+                        namespaceSet.Add(childNamespace);
+
+                        foreach (AstNode childNode in parentNode.Children)
+                        {
+                            namespaceSet.AddRange(VisitNode(childNode, childNamespace));
+                        }
+                    }
+
+                    else if (parentNode is TypeDeclaration)
+                    {
+                        TypeDeclaration typeNode = (TypeDeclaration)parentNode;
+
+                        if (typeNode.ClassType == ClassType.Class)
+                        {
+                            GeneratedCodeAttribute toolInfoAttribute = new GeneratedCodeAttribute(CodeGenerationHelper.ToolName, CodeGenerationHelper.ToolVersion);
+                            CodeAttributeDeclaration generatedCodeAttribute = new CodeAttributeDeclaration
+                            (
+                                typeof(GeneratedCodeAttribute).FullName, 
+                                new CodeAttributeArgument(new CodePrimitiveExpression(toolInfoAttribute.Tool)),
+                                new CodeAttributeArgument(new CodePrimitiveExpression(toolInfoAttribute.Version))
+                            );
+
+                            CodeTypeDeclaration metadataType = new CodeTypeDeclaration(typeNode.Name + "Metadata");
+                            metadataType.IsPartial = true;
+                            metadataType.IsClass = true;
+                            metadataType.TypeAttributes = TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Abstract;
+                            metadataType.CustomAttributes.Add(generatedCodeAttribute);
+
+                            CodeTypeDeclaration actionsType = new CodeTypeDeclaration("Actions");
+                            actionsType.IsPartial = true;
+                            actionsType.IsClass = true;
+                            actionsType.TypeAttributes = TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Abstract;
+                            metadataType.Members.Add(actionsType);
+
+                            foreach (MethodDeclaration methodNode in parentNode.Children.OfType<MethodDeclaration>())
+                            {
+                                SimpleType returnType = methodNode.ReturnType as SimpleType;
+
+                                if (returnType != null && validMethodReturnTypeNames.Contains(returnType.Identifier) && !actionsType.Members.OfType<CodeTypeMember>().Any(x => x.Name == methodNode.Name))
+                                {
+                                    CodeMemberField nameConst = new CodeMemberField(typeof(string), methodNode.Name);
+                                    nameConst.InitExpression = new CodePrimitiveExpression(methodNode.Name);
+                                    nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+                                    actionsType.Members.Add(nameConst);
+                                }
+                            }
+
+                            parentNamespace.Types.Add(metadataType);
+                        }
+                    }
+
+                    else
+                    {
+                        foreach (AstNode childNode in parentNode.Children)
+                        {
+                            namespaceSet.AddRange(VisitNode(childNode, parentNamespace));
+                        }
+                    }
+
+                    return namespaceSet;
+                };
+
+                SyntaxTree syntaxTree = parser.Parse(FileStream, Path.GetFileName(csFilePath));
+
+                if (parser.HasErrors || parser.HasWarnings)
+                {
+                    foreach (Error e in parser.Errors)
+                    {
+                        tt.Error(string.Format("PARSER ERROR: {0}", e.Message));
+                    }
+                
+                    foreach (Error e in parser.Warnings)
+                    {
+                        tt.Error(string.Format("PARSER WARNING: {0}", e.Message));
+                    }
+                }
+
+                else
+                {
+                    using (StringWriter codeWriter = new StringWriter())
+                    {
+                        CodeCompileUnit generatedCode = new CodeCompileUnit();
+
+                        generatedCode.Namespaces.AddRange(VisitNode(syntaxTree, null).ToArray());
+                        codeProvider.GenerateCodeFromCompileUnit(generatedCode, codeWriter, codeGeneratorOptions);
+
+                        tt.Write(CodeGenerationHelper.CSharp.EnsureArtifactsDefinedAsStatic(codeWriter.ToString()));
+                    }
+                }
+            }
+        }
+    }
+#>

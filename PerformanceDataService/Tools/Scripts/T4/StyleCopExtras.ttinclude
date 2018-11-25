@@ -1,0 +1,102 @@
+﻿<#@ assembly name="System.Core" #>
+<#@ assembly name="System.Xml" #>
+<#@ assembly name="System.Xml.Linq" #>
+<#@ import namespace="System.CodeDom" #>
+<#@ import namespace="System.CodeDom.Compiler" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.IO" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Reflection" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Xml.Linq" #>
+<#@ import namespace="System.Xml.XPath" #>
+<#@ import namespace="Microsoft.CSharp" #>
+<#@ import namespace="Microsoft.VisualStudio.TextTemplating" #>
+<#@ include file="Common.ttinclude" #><#+
+    public static class CSharpStyleCopRulesMetadataGenerator
+    {
+        public static void GenerateRulesMetadataClass(TextTransformation tt, string xmlFilePath, string cliNamespace, string className)
+        {
+            GenerateRulesMetadataClass(tt, xmlFilePath, cliNamespace, className, CodeGenerationHelper.DefaultCodeGeneratorOptions);
+        }
+
+        public static void GenerateRulesMetadataClass(TextTransformation tt, string xmlFilePath, string cliNamespace, string className, CodeGeneratorOptions codeGeneratorOptions)
+        {
+            Action<XElement, CodeTypeDeclaration> AddRuleConst = delegate(XElement ruleElement, CodeTypeDeclaration parentType)
+            {
+                XAttribute ruleNameAttribute = ruleElement.Attribute("Name");
+
+                if (ruleNameAttribute != null)
+                {
+                    CodeMemberField nameConst = new CodeMemberField(typeof(string), ruleNameAttribute.Value);
+                    nameConst.InitExpression = new CodePrimitiveExpression(ruleNameAttribute.Value);
+                    nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+                    XElement ruleDescriptionElement = ruleElement.Element("Description");
+
+                    if (ruleDescriptionElement != null)
+                    {
+                        nameConst.Comments.Add(new CodeCommentStatement("<summary>", true));
+                        nameConst.Comments.Add(new CodeCommentStatement(ruleDescriptionElement.Value, true));
+                        nameConst.Comments.Add(new CodeCommentStatement("</summary>", true));
+                    }
+
+                    parentType.Members.Add(nameConst);
+                }
+            };
+
+            CSharpCodeProvider codeProvider = new CSharpCodeProvider();
+            XDocument rulesXmlDoc = XDocument.Load(xmlFilePath);
+
+            using (StringWriter codeWriter = new StringWriter())
+            {
+                CodeCompileUnit generatedCode = new CodeCompileUnit();
+                CodeNamespace ns = new CodeNamespace(cliNamespace);
+                generatedCode.Namespaces.Add(ns);
+
+                GeneratedCodeAttribute toolInfoAttribute = new GeneratedCodeAttribute(CodeGenerationHelper.ToolName, CodeGenerationHelper.ToolVersion);
+                CodeAttributeDeclaration generatedCodeAttribute = new CodeAttributeDeclaration
+                (
+                    typeof(GeneratedCodeAttribute).FullName, 
+                    new CodeAttributeArgument(new CodePrimitiveExpression(toolInfoAttribute.Tool)),
+                    new CodeAttributeArgument(new CodePrimitiveExpression(toolInfoAttribute.Version))
+                );
+
+                CodeTypeDeclaration metadataType = new CodeTypeDeclaration(className + "Metadata");
+                metadataType.IsPartial = true;
+                metadataType.IsClass = true;
+                metadataType.TypeAttributes = TypeAttributes.NotPublic | TypeAttributes.Sealed | TypeAttributes.Abstract;
+                metadataType.CustomAttributes.Add(generatedCodeAttribute);
+                ns.Types.Add(metadataType);
+
+                foreach (XElement ruleElement in rulesXmlDoc.XPathSelectElements("//Rules/Rule").OrderBy(x => x.Attribute("Name").Value))
+                {
+                    AddRuleConst(ruleElement, metadataType);
+                }
+
+                foreach (XElement ruleGroupElement in rulesXmlDoc.XPathSelectElements("//Rules/RuleGroup"))
+                {
+                    CodeTypeDeclaration groupType = null;
+                    XAttribute ruleGroupNameAttribute = ruleGroupElement.Attribute("Name");
+
+                    if (ruleGroupNameAttribute != null)
+                    {
+                        groupType = new CodeTypeDeclaration(ruleGroupNameAttribute.Value.Replace(" ", string.Empty));
+                        groupType.IsPartial = true;
+                        groupType.IsClass = true;
+                        groupType.TypeAttributes = TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Abstract;
+                        metadataType.Members.Add(groupType);
+                    }
+
+                    foreach (XElement ruleElement in ruleGroupElement.Elements("Rule").OrderBy(x => x.Attribute("Name").Value))
+                    {
+                        AddRuleConst(ruleElement, groupType ?? metadataType);
+                    }
+                }
+
+                codeProvider.GenerateCodeFromCompileUnit(generatedCode, codeWriter, codeGeneratorOptions);
+                tt.Write(CodeGenerationHelper.CSharp.EnsureArtifactsDefinedAsStatic(codeWriter.ToString()));
+            }
+        }
+    }
+#>

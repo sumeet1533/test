@@ -1,0 +1,120 @@
+<#@ assembly name="System.Core" #>
+<#@ assembly name="System.Configuration" #>
+<#@ assembly name="System.Xml" #>
+<#@ assembly name="System.Xml.Linq" #>
+<#@ import namespace="System.CodeDom" #>
+<#@ import namespace="System.CodeDom.Compiler" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.Configuration" #>
+<#@ import namespace="System.IO" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Reflection" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Xml.Linq" #>
+<#@ import namespace="System.Xml.XPath" #>
+<#@ import namespace="Microsoft.CSharp" #>
+<#@ import namespace="Microsoft.VisualStudio.TextTemplating" #>
+<#@ include file="Common.ttinclude" #><#+
+    public static class CSharpConfigFileHelper
+    {
+        public static void GenerateSettingsClass(TextTransformation tt, string ns, string className, IEnumerable<string> configFilePathSet)
+        {
+            GenerateSettingsClass(tt, ns, className, configFilePathSet, CodeGenerationHelper.DefaultCodeGeneratorOptions);
+        }
+
+        public static void GenerateSettingsClass(TextTransformation tt, string ns, string className, IEnumerable<string> configFilePathSet, CodeGeneratorOptions codeGeneratorOptions)
+        {
+            CSharpCodeProvider codeProvider = new CSharpCodeProvider();
+
+            GeneratedCodeAttribute toolInfoAttribute = new GeneratedCodeAttribute(CodeGenerationHelper.ToolName, CodeGenerationHelper.ToolVersion);
+            CodeAttributeDeclaration generatedCodeAttribute = new CodeAttributeDeclaration
+            (
+                typeof(GeneratedCodeAttribute).FullName, 
+                new CodeAttributeArgument(new CodePrimitiveExpression(toolInfoAttribute.Tool)),
+                new CodeAttributeArgument(new CodePrimitiveExpression(toolInfoAttribute.Version))
+            );
+
+            CodeNamespace configSettingsTypeNamespace = new CodeNamespace(ns);
+            CodeTypeDeclaration configSettingsType = new CodeTypeDeclaration(className);
+
+            configSettingsType.IsPartial = true;
+            configSettingsType.IsClass = true;
+            configSettingsType.TypeAttributes = TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Abstract;
+            configSettingsType.CustomAttributes.Add(generatedCodeAttribute);
+
+            CodeTypeDeclaration appSettingsType = new CodeTypeDeclaration("AppSettingsKeys");
+            appSettingsType.IsPartial = true;
+            appSettingsType.IsClass = true;
+            appSettingsType.TypeAttributes = TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Abstract;
+            configSettingsType.Members.Add(appSettingsType);
+
+            CodeTypeDeclaration connectionStringsType = new CodeTypeDeclaration("ConnectionStringsNames");
+            connectionStringsType.IsPartial = true;
+            connectionStringsType.IsClass = true;
+            connectionStringsType.TypeAttributes = TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Abstract;
+            configSettingsType.Members.Add(connectionStringsType);
+
+			HashSet<string> appSettingKeySet = new HashSet<string>();
+			HashSet<string> connectionStringNameSet = new HashSet<string>();
+
+			foreach (string configFilePath in configFilePathSet)
+			{
+				XDocument configDoc = XDocument.Load(configFilePath);
+
+				IEnumerable<string> excludedSettings = new string[]
+				{
+					"aspnet:MaxJsonDeserializerMembers",
+					"webpages:Version",
+					"webpages:Enabled",
+					"ClientValidationEnabled",
+					"UnobtrusiveJavaScriptEnabled",
+				};
+
+				foreach (string appSettingKey in configDoc.XPathSelectElements("configuration/appSettings/add").Select(x => x.Attribute("key").Value).Where(x => !excludedSettings.Contains(x)))
+				{
+					appSettingKeySet.Add(appSettingKey);
+				}
+
+				IEnumerable<string> excludedConnectionStrings = new string[]
+				{
+					"LocalSqlServer",
+				};
+
+				foreach (string connectionStringName in configDoc.XPathSelectElements("configuration/connectionStrings/add").Select(x => x.Attribute("name").Value).Where(x => !excludedConnectionStrings.Contains(x)))
+				{
+					connectionStringNameSet.Add(connectionStringName);
+				}
+			}
+
+			foreach (string appSettingKey in appSettingKeySet.OrderBy(x => x))
+			{
+				CodeMemberField nameConst = new CodeMemberField(typeof(string), appSettingKey);
+				nameConst.InitExpression = new CodePrimitiveExpression(appSettingKey);
+				nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+				appSettingsType.Members.Add(nameConst);
+			}
+
+			foreach (string connectionStringName in connectionStringNameSet.OrderBy(x => x))
+			{
+				CodeMemberField nameConst = new CodeMemberField(typeof(string), connectionStringName);
+				nameConst.InitExpression = new CodePrimitiveExpression(connectionStringName);
+				nameConst.Attributes = MemberAttributes.Public | MemberAttributes.Const;
+
+				connectionStringsType.Members.Add(nameConst);
+			}
+
+			configSettingsTypeNamespace.Types.Add(configSettingsType);
+
+			using (StringWriter codeWriter = new StringWriter())
+			{
+				CodeCompileUnit generatedCode = new CodeCompileUnit();
+
+				generatedCode.Namespaces.Add(configSettingsTypeNamespace);
+				codeProvider.GenerateCodeFromCompileUnit(generatedCode, codeWriter, codeGeneratorOptions);
+
+				tt.Write(CodeGenerationHelper.CSharp.EnsureArtifactsDefinedAsStatic(codeWriter.ToString()));
+			}
+        }
+    }
+#>

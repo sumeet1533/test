@@ -1,0 +1,5 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+	<PropertyGroup>
+		<CodeAnalysisRuleSetDirectories>$(CodeAnalysisRuleSetDirectories);$(MSBuildThisFileDirectory)..\..\Analysis\Visual Studio\v$(MSBuildToolsVersion)\Rule Sets\</CodeAnalysisRuleSetDirectories>
+	</PropertyGroup>
+</Project>

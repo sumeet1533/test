@@ -1,0 +1,976 @@
+<#@ CleanupBehavior Processor="T4VSHost" CleanupAfterProcessingTemplate="true" #>
+<#@ assembly name="System.Core" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.Text" #>
+
+<#+
+
+	public enum ConstructorScopeType
+	{
+		Base,
+		This
+	}
+
+	public enum AccessType
+	{
+		Public,
+		Private,
+		Protected,
+		Internal,
+		ProtectedInternal
+	};
+
+	public sealed class Parameter
+	{
+		public string DataType { get; private set; }
+		public string Identifier { get; private set; }
+
+		public Parameter(string dataType, string identifier)
+		{
+			if (dataType == null)
+			{
+				throw new ArgumentNullException("dataType");
+			}
+
+			if (identifier == null)
+			{
+				throw new ArgumentNullException("identifier");
+			}
+
+			DataType = dataType;
+			Identifier = identifier;
+		}
+	}
+	
+	public interface ICodeBlock
+	{
+		string Identifier { get; }
+		AccessType Access { get; }
+	}
+
+	public abstract class CodeBlock : ICodeBlock
+	{
+		public string Identifier { get; private set; }
+		
+		public AccessType Access { get; set; }
+
+		public CodeBlock(string identifier)
+			: this(identifier, AccessType.Public)
+		{
+		}
+
+		public CodeBlock(string identifier, AccessType access)
+		{
+			if (identifier == null)
+			{
+				throw new ArgumentNullException("identifier");
+			}
+
+			this.Identifier = identifier;
+			this.Access = access;
+		}
+	}
+	
+	public sealed class FieldBlock : CodeBlock
+	{
+		public bool IsReadOnly { get; private set; }
+
+		public bool IsStatic { get; private set; }
+
+		public string ReturnType { get; private set; }
+
+		public FieldBlock(string identifier, string returnType, bool isReadonly, bool isStatic)
+			: this(identifier, AccessType.Public, returnType, isReadonly, isStatic)
+		{
+
+		}
+
+		public FieldBlock(string identifier, AccessType access, string returnType, bool isReadonly, bool isStatic)
+			: base(identifier, access)
+		{
+			this.ReturnType = returnType;
+			this.IsReadOnly = isReadonly;
+			this.IsStatic = isStatic;
+		}
+	}
+	
+	public sealed class PropertyBlock : CodeBlock
+	{
+		public bool IsStatic { get; private set; }
+		public string Summary { get; private set; }
+		public string SummaryValue { get; private set; }
+		public string ReturnType { get; private set; }
+
+		public AccessType GetAccess { get; private set; }
+		public AccessType SetAccess { get; private set; }
+
+		public PropertyBlock(string identifier, string returnType, bool isStatic)
+			: this(identifier, AccessType.Public, returnType, isStatic, AccessType.Public, AccessType.Public, null, null)
+		{
+		}
+
+		public PropertyBlock(string identifier, string returnType, string summary, string summaryValue)
+			: this(identifier, AccessType.Public, returnType, false, AccessType.Public, AccessType.Public, summary, summaryValue)
+		{
+		}
+
+		public PropertyBlock(string identifier, AccessType access, string returnType, bool isStatic, AccessType getAccess, AccessType setAccess, string summary, string summaryValue)
+			: base(identifier, access)
+		{
+			if (returnType == null)
+			{
+				throw new ArgumentNullException("returnType");
+			}
+
+			this.ReturnType = returnType;
+			this.Summary = summary;
+			this.SummaryValue = summaryValue;
+			this.IsStatic = isStatic;
+			this.GetAccess = getAccess;
+			this.SetAccess = setAccess;
+		}
+	}
+	
+	public sealed class ConstructorBlock : CodeBlock
+	{
+		public bool IsStatic { get; private set; }
+		public string Code { get; private set; }
+		public string Summary { get; private set; }
+
+		public ConstructorScopeType Scope { get; private set; }
+
+		private List<string> scopeParameters = new List<string>();
+		public string[] ScopeParameters { get { return this.scopeParameters.ToArray(); } }
+
+		private List<Parameter> parameters = new List<Parameter>();
+		public Parameter[] Parameters { get { return this.parameters.ToArray(); } }
+
+		public static string GetScopeTypeString(ConstructorScopeType scopeType)
+		{
+			string scope = string.Empty;
+
+			switch(scopeType)
+			{
+				case ConstructorScopeType.This:
+					scope = "this";
+					break;
+
+				default:
+					scope = "base";
+					break;
+			}
+
+			return scope;
+		}
+
+		private ConstructorBlock(string identifier, AccessType access, bool isStatic, string code, string summary, ConstructorScopeType scopeType)
+			: base(identifier, access)
+		{
+			this.Code = code;
+			this.Summary = summary;
+			this.IsStatic = isStatic;
+			this.Scope = scopeType;
+		}
+
+		public ConstructorBlock(string identifier, AccessType access, string summary)
+			: this(identifier, access, false, null, summary, ConstructorScopeType.Base)
+		{
+		}
+
+		public ConstructorBlock(string identifier, AccessType access, string code, string summary)
+			: this(identifier, access, false, code, summary, ConstructorScopeType.Base)
+		{
+		}
+
+		public ConstructorBlock(string identifier, AccessType access, bool isStatic, string code)
+			: this(identifier, access, isStatic, code, null, ConstructorScopeType.Base)
+		{
+		}
+
+		public void AddParameter(string dataType, string identifier)
+		{
+			if (dataType == null)
+			{
+				throw new ArgumentNullException("dataType");
+			}
+
+			if (identifier == null)
+			{
+				throw new ArgumentNullException("identifier");
+			}
+
+			Parameter parameter = new Parameter(dataType, identifier);
+			AddParameter(parameter);
+		}
+
+		public void AddParameter(Parameter parameter)
+		{
+			if (parameter == null)
+			{
+				throw new ArgumentNullException("parameter");
+			}
+
+			this.parameters.Add(parameter);
+		}
+
+		public void AddScopeParameter(string identifier)
+		{
+			if (identifier == null)
+			{
+				throw new ArgumentNullException("identifier");
+			}
+
+			this.scopeParameters.Add(identifier);
+		}
+	}
+	
+	public sealed class MethodBlock : CodeBlock
+	{
+		public bool IsOverride { get; private set; }
+		public bool IsPartial { get; private set; }
+
+		private bool isStatic;
+		public bool IsStatic 
+		{
+			get { return this.isStatic; }
+			set { MakeStatic(value); }
+		}
+
+		public string Summary { get; private set; }
+
+		public string Code { get; private set; }
+
+		public string ReturnType { get; private set; }
+
+		private List<Parameter> parameters = new List<Parameter>();
+		public Parameter[] Parameters { get { return this.parameters.ToArray(); } }
+
+		public MethodBlock(string identifier, string returnType, string summary)
+			: this(identifier, AccessType.Public, returnType, false, null, summary)
+		{
+		}
+
+        public MethodBlock(string identifier, AccessType access, string returnType, bool isOverride, string code, string summary)
+            : this(identifier, access, returnType, isOverride, code, summary, false)
+        {
+        }
+
+		public MethodBlock(string identifier, AccessType access, string returnType, bool isOverride, string code, string summary, bool isPartial)
+			: base(identifier, access)
+		{
+			if (returnType == null)
+			{
+				throw new ArgumentNullException("returnType");
+			}
+
+			this.ReturnType = returnType;
+			this.Code = code;
+			this.Summary = summary;
+			this.IsOverride = isOverride;
+            this.IsPartial = isPartial;
+		}
+
+		public void MakeStatic(bool isStatic)
+		{
+			if(isStatic)
+			{
+				this.IsOverride = false;
+			}
+
+			this.isStatic = isStatic;
+		}
+
+		public void AddParameter(string dataType, string identifier)
+		{
+			if (dataType == null)
+			{
+				throw new ArgumentNullException("dataType");
+			}
+
+			if (identifier == null)
+			{
+				throw new ArgumentNullException("identifier");
+			}
+
+			Parameter parameter = new Parameter(dataType, identifier);
+			AddParameter(parameter);
+		}
+
+		public void AddParameter(Parameter parameter)
+		{
+			if (parameter == null)
+			{
+				throw new ArgumentNullException("parameter");
+			}
+
+			this.parameters.Add(parameter);
+		}
+	}
+	
+	public sealed class ClassBlock : CodeBlock
+	{
+		private bool isStatic;
+		public bool IsStatic 
+		{
+			get { return this.isStatic; }
+			set
+			{
+				MakeStatic(value);
+			}
+		}
+
+		private bool isSealed;
+		public bool IsSealed 
+		{ 
+			get { return this.isSealed; }
+			set
+			{
+				MakeSealed(value);
+			}
+		}
+
+		public bool IsPartial { get; private set; }
+
+		public string Namespace { get; set; }
+		
+		public string FileName { get; set; }
+
+		public string Summary { get; private set; }
+
+		private List<string> references = new List<string>();
+		public string[] References { get { return this.references.ToArray(); } }
+
+		private List<string> parentClasses = new List<string>();
+		public string[] ParentClasses { get { return this.parentClasses.ToArray(); } }
+
+		private List<FieldBlock> fields = new List<FieldBlock>();
+		public FieldBlock[] Fields { get { return fields.ToArray(); } }
+		
+		private List<PropertyBlock> properties = new List<PropertyBlock>();
+		public PropertyBlock[] Properties { get { return properties.ToArray(); } }
+
+		private List<ConstructorBlock> constructors = new List<ConstructorBlock>();
+		public ConstructorBlock[] Constructors { get { return this.constructors.ToArray(); } }
+
+		private List<MethodBlock> methods = new List<MethodBlock>();
+		public MethodBlock[] Methods { get { return methods.ToArray(); } }
+
+		private ClassBlock(string identifier, AccessType access, bool isStatic, bool isSealed, bool isPartial, string summary)
+			: base(identifier, access)
+		{
+			this.Summary = summary;
+			this.IsSealed = isSealed;
+			this.IsPartial = isPartial;
+			this.IsStatic = isStatic;
+		}
+
+		public ClassBlock(string identifier)
+			: this(identifier, AccessType.Public, false, false, false, null)
+		{
+		}
+
+		public ClassBlock(string identifier, bool isPartial, string summary)
+			: this(identifier, AccessType.Public, false, false, isPartial, summary)
+		{
+		}
+		
+		public void MakeStatic(bool isStatic)
+		{
+			if (isStatic)
+			{
+				MakeSealed(false);
+			}
+
+			this.isStatic = isStatic;
+		}
+
+		public void MakeSealed(bool isSealed)
+		{
+			if (isSealed)
+			{
+				MakeStatic(false);
+			}
+
+			this.isSealed = isSealed;
+		}
+
+		public void AddReferences(params string[] references)
+		{
+			if (references == null)
+			{
+				throw new ArgumentNullException("references");
+			}
+
+			foreach (string reference in references)
+			{
+				this.references.Add(reference);
+			}
+		}
+
+		public void AddParentClasses(params string[] classes)
+		{
+			if (classes == null)
+			{
+				throw new ArgumentNullException("classes");
+			}
+
+			foreach (string className in classes)
+			{
+				AddParentClass(className);
+			}
+		}
+
+		public void AddParentClass(string className)
+		{
+			if (className == null)
+			{
+				throw new ArgumentNullException("className");
+			}
+			
+			this.parentClasses.Add(className);
+		}
+		
+		public FieldBlock AddField(string identifier, string returnType, bool isReadOnly, bool isStatic)
+		{
+			FieldBlock field = new FieldBlock(identifier, returnType, isReadOnly, isStatic);
+			AddField(field);
+
+			return field;
+		}
+
+		public void AddField(FieldBlock field)
+		{
+			if (field == null)
+			{
+				throw new ArgumentNullException("field");
+			}
+
+			this.fields.Add(field);
+		}
+		
+		public PropertyBlock AddProperty(string identifier, string returnType, bool isStatic)
+		{
+			PropertyBlock property = new PropertyBlock(identifier, returnType, isStatic);
+			AddProperty(property);
+
+			return property;
+		}
+
+		public PropertyBlock AddProperty(string identifier, string returnType, string summary, string summaryValue)
+		{
+			return AddProperty(identifier, returnType, AccessType.Public, AccessType.Public, summary, summaryValue);
+		}
+
+		public PropertyBlock AddProperty(string identifier, string returnType, AccessType getAccess, AccessType setAccess, string summary, string summaryValue)
+		{
+			PropertyBlock property = new PropertyBlock(identifier, AccessType.Public, returnType, false, getAccess, setAccess, summary, summaryValue);
+			AddProperty(property);
+
+			return property;
+		}
+
+		public void AddProperty(PropertyBlock property)
+		{
+			if (property == null)
+			{
+				throw new ArgumentNullException("property");
+			}
+
+			properties.Add(property);
+		}
+
+        public MethodBlock AddMethod(string identifier, AccessType access, string returnType, bool isOverride, string code, string summary)
+        {
+            return AddMethod(identifier, access, returnType, isOverride, code, summary, false);
+        }
+
+		public MethodBlock AddMethod(string identifier, AccessType access, string returnType, bool isOverride, string code, string summary, bool isPartial)
+		{
+			MethodBlock method = new MethodBlock(identifier, access, returnType, isOverride, code, summary, isPartial);
+			AddMethod(method);
+
+			return method;
+		}
+
+		public void AddMethod(MethodBlock method)
+		{
+			if (method == null)
+			{
+				throw new ArgumentNullException("method");
+			}
+
+			methods.Add(method);
+		}
+
+		public ConstructorBlock AddConstructor(AccessType access, string summary)
+		{
+			ConstructorBlock constructor = new ConstructorBlock(Identifier, access, summary);
+			AddConstructor(constructor);
+
+			return constructor;
+		}
+
+		public void AddConstructor(ConstructorBlock constructor)
+		{
+			if (constructor == null)
+			{
+				throw new ArgumentNullException("constructor");
+			}
+
+			this.constructors.Add(constructor);
+		}
+	}
+	
+	/*************************************************************************************************************************
+	** Builder Class
+	**
+	*************************************************************************************************************************/
+	public abstract class Builder
+	{
+		private string indent;
+		private StringBuilder builder = new StringBuilder();
+
+		public override string ToString()
+		{
+			return this.builder.ToString();
+		}
+
+		public virtual void Clear()
+		{
+			this.builder = this.builder.Clear();
+		}
+		
+		public void PushIndent()
+		{
+			this.indent += CodeGenerationHelper.TabIndent;
+		}
+
+		public void PopIndent()
+		{
+			this.indent = this.indent.Remove(this.indent.Length - 1);
+		}
+
+		protected void AppendLine(string value)
+		{
+			this.builder.Append(this.indent);
+			this.builder.AppendLine(value);
+		}
+
+		protected void AppendLine(string format, params object[] args)
+		{
+			this.builder.Append(this.indent);
+			this.builder.AppendFormat(format, args);
+			this.builder.AppendLine(string.Empty);
+		}
+	}
+	
+	public class CSharpBuilder : Builder
+	{
+		public const string OpenBrace = "{";
+		public const string CloseBrace = "}";
+
+		public const string SummaryPrefix = "///";
+
+		public static string GetAccessString(AccessType access)
+		{
+			string val = string.Empty;
+
+			switch (access)
+			{
+				case AccessType.Private:
+					val = "private";
+					break;
+
+				case AccessType.Protected:
+					val = "protected";
+					break;
+
+				case AccessType.Internal:
+					val = "internal";
+					break;
+
+				case AccessType.ProtectedInternal:
+					val = "protected internal";
+					break;
+
+				default:
+					val = "public";
+					break;
+			}
+
+			return val;
+		}
+
+		public CSharpBuilder()
+		{
+		}
+
+		public CSharpBuilder(ClassBlock classBlock)
+		{
+			AppendClassBlock(classBlock);
+		}
+
+		public void AppendReferences(params string[] references)
+		{
+			foreach (string reference in references)
+			{
+				AppendLine("using {0};", reference);
+			}
+		}
+
+		public void AppendNamespace(string namespaceIdentifier)
+		{
+			if (namespaceIdentifier == null)
+			{
+				throw new ArgumentNullException("namespaceIdentifier");
+			}
+
+			AppendLine("namespace {0}", namespaceIdentifier);
+		}
+
+		public void AppendClassBlock(ClassBlock classBlock)
+		{
+			if (classBlock == null)
+			{
+				throw new ArgumentNullException("classBlock");
+			}
+
+			AppendReferences(classBlock.References);
+			AppendLine(string.Empty);
+
+			if (!string.IsNullOrEmpty(classBlock.Namespace))
+			{
+				AppendNamespace(classBlock.Namespace);
+				AppendOpenBlock();
+			}
+
+			AppendClass(classBlock);
+			AppendOpenBlock();
+
+			AppendFields(classBlock.Fields);
+			
+			AppendProperties(classBlock.Properties);
+
+			AppendConstructors(classBlock.Constructors);
+
+			AppendClassMethods(classBlock.Methods);
+
+			AppendCloseBlock();
+
+			if (!string.IsNullOrEmpty(classBlock.Namespace))
+			{
+				AppendCloseBlock();
+			}
+		}
+
+		public void AppendFields(params FieldBlock[] fields)
+		{
+			if (fields == null)
+			{
+				throw new ArgumentNullException("fields");
+			}
+
+			foreach(FieldBlock field in fields)
+			{
+				string access = GetAccessString(field.Access);
+				StringBuilder sb = new StringBuilder(access);
+
+				if (field.IsReadOnly)
+				{
+					sb.Append(" readonly");
+				}
+
+				if (field.IsStatic)
+				{
+					sb.Append(" static");
+				}
+
+				sb.Append(string.Format(" {0} {1};", field.ReturnType, field.Identifier));
+				AppendLine("{0}{1}", sb.ToString(), Environment.NewLine);
+			}
+		}
+
+		public void AppendProperties(params PropertyBlock[] properties)
+		{
+			if (properties == null)
+			{
+				throw new ArgumentNullException("properties");
+			}
+
+			foreach (PropertyBlock property in properties)
+			{
+				if (!string.IsNullOrEmpty(property.Summary))
+				{
+					AppendSummary(property.Summary);
+				}
+
+				if (!string.IsNullOrEmpty(property.SummaryValue))
+				{
+					AppendSummaryValue(property.SummaryValue);
+				}
+
+				string access = GetAccessString(property.Access);
+				StringBuilder sb = new StringBuilder(access);
+
+				if (property.IsStatic)
+				{
+					sb.Append(" static");
+				}
+				
+				string getAccess = (AccessType.Public == property.GetAccess) ? string.Empty : GetAccessString(property.GetAccess);
+				string setAccess = (AccessType.Public == property.SetAccess) ? string.Empty : GetAccessString(property.SetAccess);
+
+				sb.Append(string.Format(" {0} {1} {{", property.ReturnType, property.Identifier));
+
+				if (!string.IsNullOrEmpty(getAccess))
+				{
+					sb.Append(string.Format(" {0}", getAccess));
+				}
+
+				sb.Append(" get;");
+					
+					
+				if (!string.IsNullOrEmpty(setAccess))
+				{
+					sb.Append(string.Format(" {0}", setAccess));
+				}
+
+				sb.Append(" set; }");
+
+				AppendLine("{0}{1}", sb.ToString(), Environment.NewLine);
+			}
+		}
+
+		public void AppendConstructors(params ConstructorBlock[] constructors)
+		{
+			if (constructors == null)
+			{
+				throw new ArgumentNullException("constructors");
+			}
+
+			foreach (ConstructorBlock constructor in constructors)
+			{
+				if (!string.IsNullOrEmpty(constructor.Summary))
+				{
+					AppendSummary(constructor.Summary);
+				}
+
+				StringBuilder sb = new StringBuilder();
+
+				if (constructor.IsStatic)
+				{
+					sb.Append(string.Format("static {0}(", constructor.Identifier));
+				}
+				else
+				{
+					string access = GetAccessString(constructor.Access);
+					sb.Append(string.Format("{0} {1}(", access, constructor.Identifier));
+				}
+
+				sb.Append(BuildParameters(constructor.Parameters));
+				sb.Append(")");
+				AppendLine(sb.ToString());
+
+				if (constructor.ScopeParameters.Length > 0)
+				{
+					sb.Clear();
+					PushIndent();
+					sb.Append(string.Format(": {0}(", ConstructorBlock.GetScopeTypeString(constructor.Scope)));
+					sb.Append(BuildParameters(constructor.ScopeParameters));
+					sb.Append(")");
+
+					AppendLine(sb.ToString());
+					PopIndent();
+				}
+
+				AppendOpenBlock();
+
+				if (!string.IsNullOrEmpty(constructor.Code))
+				{
+					AppendCode(constructor.Code);
+				}
+
+				AppendCloseBlock();
+			}
+		}
+
+		public void AppendClassMethods(params MethodBlock[] methods)
+		{
+			if (methods == null)
+			{
+				throw new ArgumentNullException("methods");
+			}
+
+			foreach (MethodBlock method in methods)
+			{
+				if (!string.IsNullOrEmpty(method.Summary))
+				{
+					AppendSummary(method.Summary);
+				}
+
+				StringBuilder sb = new StringBuilder();
+
+                if (method.IsPartial)
+                {
+                    sb.Append(string.Format("partial {0} {1}(", method.ReturnType, method.Identifier));
+                    sb.Append(BuildParameters(method.Parameters));
+                    sb.Append(");");
+
+                    AppendLine("{0}", sb.ToString());
+                }
+
+                else
+                {
+                    string access = GetAccessString(method.Access);
+                    sb.Append(access);
+
+                    if (method.IsStatic)
+                    {
+                        sb.Append(" static");
+                    }
+                    else if(method.IsOverride)
+                    {
+                        sb.Append(" override");
+                    }
+
+                    sb.Append(string.Format(" {0} {1}(", method.ReturnType, method.Identifier));
+				    sb.Append(BuildParameters(method.Parameters));
+				    sb.Append(")");
+
+				    AppendLine("{0}", sb.ToString());
+
+				    AppendOpenBlock();
+
+				    if (!string.IsNullOrEmpty(method.Code))
+				    {
+					    AppendCode(method.Code);
+				    }
+
+				    AppendCloseBlock();
+                }
+			}
+		}
+		
+		public virtual void AppendCode(string code)
+		{
+			if(string.IsNullOrEmpty(code))
+			{
+				return;
+			}
+
+			string[] codeLines = code.Split(new string[] { Environment.NewLine }, StringSplitOptions.None);
+			foreach(string codeLine in codeLines)
+			{
+				AppendLine(codeLine);
+			}
+		}
+
+		public virtual void AppendOpenBlock()
+		{
+			AppendLine(OpenBrace);
+			PushIndent();
+		}
+
+		public virtual void AppendCloseBlock()
+		{
+			PopIndent();
+			AppendLine(CloseBrace);
+		}
+
+		protected virtual string BuildParameters(IEnumerable<Parameter> parameters)
+		{
+			StringBuilder sb = new StringBuilder();
+
+			int count = 0;
+			foreach (Parameter parameter in parameters)
+			{
+				string format = (count++ == 0) ? "{0} {1}" : ", {0} {1}";
+				sb.Append(string.Format(format, parameter.DataType, parameter.Identifier));
+			}
+
+			return sb.ToString();
+		}
+
+		protected virtual string BuildParameters(IEnumerable<string> parameters)
+		{
+			StringBuilder sb = new StringBuilder();
+
+			int count = 0;
+			foreach (string parameter in parameters)
+			{
+				string format = (count++ == 0) ? "{0}" : ", {0}";
+				sb.Append(string.Format(format, parameter));
+			}
+
+			return sb.ToString();
+		}
+
+		protected virtual void AppendSummary(string description)
+		{
+			if (description == null)
+			{
+				throw new ArgumentNullException("description");
+			}
+
+			if (description.Contains("inheritdoc"))
+			{
+				AppendLine("/// {0}", description);
+			}
+			else
+			{
+				AppendLine("/// <summary>");
+				AppendLine("/// {0}", description);
+				AppendLine("/// </summary>");
+			}
+		}
+
+		protected virtual void AppendSummaryValue(string description)
+		{
+			if (description == null)
+			{
+				throw new ArgumentNullException("description");
+			}
+
+			AppendLine("/// <value> {0} </value>", description);
+		}
+
+		protected void AppendClass(ClassBlock classBlock)
+		{
+			if (!string.IsNullOrEmpty(classBlock.Summary))
+			{
+				AppendSummary(classBlock.Summary);
+			}
+
+			string access = GetAccessString(classBlock.Access);
+
+			StringBuilder sb = new StringBuilder(access);
+
+			if (classBlock.IsSealed)
+			{
+				sb.Append(" sealed");
+			}
+			else if (classBlock.IsStatic)
+			{
+				sb.Append(" static");
+			}
+
+			if (classBlock.IsPartial)
+			{
+				sb.Append(" partial");
+			}
+
+			sb.Append(string.Format(" class {0}", classBlock.Identifier));
+
+			for (int i = 0; i < classBlock.ParentClasses.Length; i++)
+			{
+				string prefix = (i == 0) ? " : " : ", ";
+				string parentClass = classBlock.ParentClasses[i];
+
+				sb.Append(string.Format("{0}{1}", prefix, parentClass));
+			}
+
+			AppendLine(sb.ToString());
+		}
+	}
+
+#>

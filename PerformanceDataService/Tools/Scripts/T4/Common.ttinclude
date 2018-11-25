@@ -1,0 +1,30 @@
+<#@ import namespace="System.CodeDom.Compiler" #><#+
+    public static class CodeGenerationHelper
+    {
+        public const string TabIndent = "\t";
+        public const string ToolName= "AssetMark T4 Templates";
+        public const string ToolVersion= "1.0.0.0";
+		public const string FileExtension = "gen.cs";
+		public const string EntityClassSuffix = "Entity";
+		public const string MetadataClassSuffix = "EntityMetadata";
+		public const string RepositoryClassSuffix = "Repository";
+		public const string ConfiguratorClassSuffix = "EntityConfigurator";
+		public const string EntityClassPrefix = "EF";
+				
+        public static CodeGeneratorOptions DefaultCodeGeneratorOptions = new CodeGeneratorOptions()
+        {
+            BlankLinesBetweenMembers  = false,
+            BracingStyle = "C",
+            IndentString = TabIndent,
+            VerbatimOrder = true,
+        };
+		
+        public static class CSharp
+        {
+            public static string EnsureArtifactsDefinedAsStatic(string generatedCodeOutput)
+            {
+                return generatedCodeOutput.Replace("sealed abstract", "static");
+            }
+        }
+    }
+#>
